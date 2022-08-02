@@ -17,14 +17,16 @@ from utils.utils import *
 from models import *
 
 import sys
-import mmcv
-from mmcv.ops import RoIAlign, RoIPool
+# import mmcv
+# from mmcv.ops import RoIAlign, RoIPool
 from mmcv.parallel import collate, scatter
 sys.path.append('./mmdetection/')
 from mmdet.datasets.pipelines import Compose
 from mmdet import __version__
 from mmdet.apis.inference import init_detector, LoadImage
+from tool2 import darknet2pytorch
 #torch.cuda.set_device(0)
+torch.cuda.empty_cache()
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--epoch', type=int, default=1, help='number of epochs to train for')
@@ -50,13 +52,17 @@ pre = transforms.Compose([transforms.ToTensor()])
 nor = transforms.Normalize([123.675/255., 116.28/255., 103.53/255.],[58.395/255., 57.12/255., 57.375/255.])
 
 model1 = Yolov4(yolov4conv137weight=None, n_classes=80, inference=True)
-pretrained_dict = torch.load('checkpoints/yolov4.pth', map_location=torch.device('cuda'))
-model1.load_state_dict(pretrained_dict)
+# pretrained_dict = torch.load('checkpoints/yolov4.pth', map_location=torch.device('cuda'))
+# model1.load_state_dict(pretrained_dict)
+
+model1 = darknet2pytorch.Darknet('checkpoints/yolov4.cfg', inference=True)
+model1.load_state_dict(torch.load('checkpoints/yolov4.pth'))
+
 model1.eval().cuda()
 
 config = './mmdetection/configs/faster_rcnn/faster_rcnn_r50_fpn_1x_coco.py'
 checkpoint = './checkpoints/faster_rcnn_r50_fpn_1x_coco_20200130-047c8118.pth'
-meta = [{'filename': '../images/6.png', 'ori_filename': '../images/6.png', 'ori_shape': (500, 500, 3), 'img_shape': (800, 800, 3), 'pad_shape': (800, 800, 3), 'scale_factor': np.array([1.6, 1.6, 1.6, 1.6], dtype=np.float32), 'flip': False, 'flip_direction': None, 'img_norm_cfg': {'mean': np.array([123.675, 116.28 , 103.53 ], dtype=np.float32), 'std': np.array([58.395, 57.12 , 57.375], dtype=np.float32), 'to_rgb': True}}]
+meta = [{'filename': './images/6.png', 'ori_filename': './images/6.png', 'ori_shape': (500, 500, 3), 'img_shape': (800, 800, 3), 'pad_shape': (800, 800, 3), 'scale_factor': np.array([1.6, 1.6, 1.6, 1.6], dtype=np.float32), 'flip': False, 'flip_direction': None, 'img_norm_cfg': {'mean': np.array([123.675, 116.28 , 103.53 ], dtype=np.float32), 'std': np.array([58.395, 57.12 , 57.375], dtype=np.float32), 'to_rgb': True}}]
 model2 = init_detector(config, checkpoint, device='cuda:0')
 
 cfg = model2.cfg
@@ -68,6 +74,9 @@ test_pipeline = Compose(test_pipeline)
 
 def get_mask(image, meta, pixels):
     mask = torch.zeros((1,3,500,500)).cuda()
+    # bbox = model2(return_loss=False, rescale=True, img=image, img_metas=meta)
+    # bbox = np.array([i.flatten() for i in bbox[0] if len(i)>0])
+    # print(bbox)
     bbox, label = model2(return_loss=False, rescale=True, img=image, img_metas=meta)
     bbox = bbox[bbox[:,4]>0.3]
     num = bbox.shape[0]
@@ -94,6 +103,9 @@ def get_mask(image, meta, pixels):
 def get_mask2(image, meta, pixels):
     mask = torch.zeros((1,3,500,500)).cuda()
     bbox, label = model2(return_loss=False, rescale=True, img=image, img_metas=meta)
+    # bbox = model2(return_loss=False, rescale=True, img=image, img_metas=meta)
+    # bbox = np.array([i.flatten() for i in bbox[0] if len(i)>0])
+    # print(bbox)
     bbox = bbox[bbox[:,4]>0.3]
     num = bbox.shape[0]
     if num > 10: num = 10
@@ -116,7 +128,7 @@ def get_mask2(image, meta, pixels):
 
     return mask
 
-files = os.listdir('../images')
+files = os.listdir('./images')
 files.sort()
 #files = files[100:120]
     
@@ -137,7 +149,7 @@ for file in files:
         break
     print(file)
     # prepare data
-    data = dict(img='../images/'+file)
+    data = dict(img='./images/'+file)
     data = test_pipeline(data)
     data = collate([data], samples_per_gpu=1)
     data = scatter(data, [device])[0]
@@ -146,11 +158,12 @@ for file in files:
     mask = get_mask(data['img'], data['img_metas'], pixels)
     mask2 = get_mask2(data['img'], data['img_metas'], pixels)
     
-    img_pil = cv2.imread('../images/'+file)
+    img_pil = cv2.imread('./images/'+file)
     img_pil = cv2.cvtColor(img_pil, cv2.COLOR_BGR2RGB)
     img_pil = np.transpose(img_pil, (2,0,1))
     img = torch.from_numpy(img_pil/255.).float()
-    img = img.unsqueeze(0).cuda()   
+    img = img.unsqueeze(0).cuda()
+    img = F.interpolate(img,size=500) # add by me
     
     patch = img.clone().detach()
     patch.requires_grad = True
